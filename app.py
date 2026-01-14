@@ -2,16 +2,18 @@ import sys
 import json
 import zmq
 import datetime
+import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
     QMessageBox, QHeaderView, QAbstractItemView, QTextEdit, QMenu
 )
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QCloseEvent
 from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer
 
 # Constants
 ZMQ_ENDPOINT = "tcp://127.0.0.1:5555"
+CONFIG_FILE = "config.json"
 
 class RegistryTableModel(QAbstractTableModel):
     def __init__(self):
@@ -113,7 +115,32 @@ class MainWindow(QMainWindow):
         self.monitoring = False
 
         self.init_ui()
+        self.load_config()
         self.init_worker()
+
+    def load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, "r") as f:
+                    config = json.load(f)
+                    filters = config.get("filters", "")
+                    self.txt_filter.setPlainText(filters)
+            except Exception as e:
+                print(f"Error loading config: {e}")
+
+    def save_config(self):
+        config = {
+            "filters": self.txt_filter.toPlainText().strip()
+        }
+        try:
+            with open(CONFIG_FILE, "w") as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            print(f"Error saving config: {e}")
+
+    def closeEvent(self, event: QCloseEvent):
+        self.save_config()
+        super().closeEvent(event)
 
     def init_ui(self):
         central_widget = QWidget()
@@ -145,6 +172,17 @@ class MainWindow(QMainWindow):
         self.txt_filter.setPlaceholderText("HKEY_CURRENT_USER\\Software\\Microsoft\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Google")
         self.txt_filter.setMaximumHeight(80)
         filter_box.addWidget(self.txt_filter)
+        
+        filter_btn_layout = QHBoxLayout()
+        self.btn_save_config = QPushButton("Save Filter Config")
+        self.btn_save_config.clicked.connect(self.save_config)
+        filter_btn_layout.addWidget(self.btn_save_config)
+        
+        self.btn_clear_filter = QPushButton("Clear Filters")
+        self.btn_clear_filter.clicked.connect(lambda: self.txt_filter.clear())
+        filter_btn_layout.addWidget(self.btn_clear_filter)
+        
+        filter_box.addLayout(filter_btn_layout)
         filter_stats_layout.addLayout(filter_box, 2)
 
         stats_box = QVBoxLayout()
@@ -290,6 +328,7 @@ class MainWindow(QMainWindow):
             if path not in current_filter:
                 new_filter = current_filter + ("\n" if current_filter else "") + path
                 self.txt_filter.setPlainText(new_filter)
+                self.save_config()
 
     def clear_events(self):
         self.model.clear()
