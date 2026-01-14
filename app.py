@@ -319,10 +319,29 @@ class RegistryTableModel(QAbstractTableModel):
             self.events = self.events[overflow:]
         self.endInsertRows()
 
-    def clear(self):
-        self.beginResetModel()
-        self.events = []
-        self.endResetModel()
+      def clear(self):
+          self.beginResetModel()
+          self.events = []
+          self.endResetModel()
+
+      def remove_events_matching_filter(self, filter_path: str) -> int:
+          filter_norm = normalize_path(filter_path)
+          indices_to_remove = []
+          for i, event in enumerate(self.events):
+              key_path = event.get("key_path", "")
+              key_norm = normalize_path(key_path)
+              if key_norm == filter_norm or key_norm.startswith(filter_norm + "\\"):
+                  indices_to_remove.append(i)
+          
+          if not indices_to_remove:
+              return 0
+          
+          self.beginResetModel()
+          for i in reversed(indices_to_remove):
+              del self.events[i]
+          self.endResetModel()
+          
+          return len(indices_to_remove)
 
 class ZMQSubscriberThread(QThread):
     events_received = pyqtSignal(list)
@@ -655,6 +674,11 @@ class MainWindow(QMainWindow):
         
         self.list_filters.addItem(path)
         self.save_config()
+        
+        removed_count = self.model.remove_events_matching_filter(path)
+        if removed_count > 0:
+            self.filtered_count += removed_count
+            self.update_stats_display()
         
         if children_to_remove:
             self.show_children_removed_info(children_to_remove)

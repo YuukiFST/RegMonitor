@@ -4,7 +4,8 @@
         "HKEY_CURRENT_USER\\Software\\Thorium\\StabilityMetrics",
         "HKEY_CURRENT_USER\\Software\\Thorium",
         "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\W32Time\\SecureTimeLimits",
-        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\BITS"
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\BITS",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits"
     ],
     "dwords_ignoradas": []
 }
