@@ -1,6 +1,5 @@
 {
     "filtros_paths": [
-        "HKEY_CURRENT_USER\\Software\\AMD\\HKIDs",
         "HKEY_LOCAL_MACHINE\\SYSTEM\\ControlSet001\\Services\\.NET Data Provider for SqlServer\\",
         "HKEY_LOCAL_MACHINE\\SYSTEM\\DriverDatabase\\DriverPackages\\",
         "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Services\\SharedAccess\\Epoch",

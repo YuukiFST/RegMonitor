@@ -247,6 +247,18 @@ class MainWindow(QMainWindow):
         self.worker.events_received.connect(self.on_events_received)
         self.worker.stats_updated.connect(self.on_stats_updated)
 
+    def toggle_monitoring(self):
+        if not self.monitoring:
+            self.monitoring = True
+            self.start_time = datetime.datetime.now()
+            self.worker.start()
+            self.btn_toggle.setText("Stop Monitoring")
+        else:
+            self.monitoring = False
+            self.worker.stop()
+            self.btn_toggle.setText("Start Monitoring")
+        self.update_stats_display()
+
     def remove_selected_filter(self):
         selected_items = self.list_filters.selectedItems()
         if not selected_items:
