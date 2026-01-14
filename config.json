@@ -1,0 +1,3 @@
+{
+    "filters": "HKEY_CURRENT_USER\\Software\\AMD\\HKIDs\nHKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\W32Time\\SecureTimeLimits"
+}

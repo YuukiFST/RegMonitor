@@ -167,6 +167,21 @@ class MainWindow(QMainWindow):
         filter_stats_layout = QHBoxLayout()
         
         filter_box = QVBoxLayout()
+        
+        # Add Path section
+        add_filter_layout = QHBoxLayout()
+        add_filter_layout.addWidget(QLabel("Add Path to Filter:"))
+        self.ent_add_filter = QLineEdit()
+        self.ent_add_filter.setPlaceholderText("Enter registry path to exclude...")
+        self.ent_add_filter.returnPressed.connect(self.add_current_path_to_filter)
+        add_filter_layout.addWidget(self.ent_add_filter)
+        
+        self.btn_add_filter = QPushButton("Add Path")
+        self.btn_add_filter.clicked.connect(self.add_current_path_to_filter)
+        add_filter_layout.addWidget(self.btn_add_filter)
+        filter_box.addLayout(add_filter_layout)
+
+        # See Paths section
         filter_box.addWidget(QLabel("Excluded Paths (one per line):"))
         self.txt_filter = QTextEdit()
         self.txt_filter.setPlaceholderText("HKEY_CURRENT_USER\\Software\\Microsoft\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Google")
@@ -329,6 +344,20 @@ class MainWindow(QMainWindow):
                 new_filter = current_filter + ("\n" if current_filter else "") + path
                 self.txt_filter.setPlainText(new_filter)
                 self.save_config()
+
+    def add_current_path_to_filter(self):
+        path = self.ent_add_filter.text().strip()
+        if path:
+            current_filter = self.txt_filter.toPlainText().strip()
+            # Check if path already exists in filter to avoid duplicates
+            existing_paths = [p.strip() for p in current_filter.split("\n") if p.strip()]
+            if path not in existing_paths:
+                new_filter = current_filter + ("\n" if current_filter else "") + path
+                self.txt_filter.setPlainText(new_filter)
+                self.ent_add_filter.clear()
+                self.save_config()
+            else:
+                self.ent_add_filter.clear()
 
     def clear_events(self):
         self.model.clear()
