@@ -7,14 +7,229 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
     QMessageBox, QHeaderView, QAbstractItemView, QTextEdit, QMenu,
-    QListWidget, QGroupBox
+    QListWidget, QGroupBox, QListWidgetItem, QFrame
 )
-from PyQt6.QtGui import QAction, QCloseEvent
-from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QAction, QCloseEvent, QKeyEvent
+from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer, QEvent
 
 # Constants
 ZMQ_ENDPOINT = "tcp://127.0.0.1:5555"
 CONFIG_FILE = "config.json"
+AUTOCOMPLETE_DEBOUNCE_MS = 300
+AUTOCOMPLETE_MAX_SUGGESTIONS = 5
+
+
+def get_lcp_length(s1: str, s2: str) -> int:
+    s1_lower = s1.lower()
+    s2_lower = s2.lower()
+    min_len = min(len(s1_lower), len(s2_lower))
+    lcp = 0
+    for i in range(min_len):
+        if s1_lower[i] == s2_lower[i]:
+            lcp += 1
+        else:
+            break
+    return lcp
+
+
+def get_path_suggestions(user_input: str, existing_paths: list, max_results: int = 5) -> list:
+    if not user_input or not user_input.strip():
+        return []
+    
+    user_input = user_input.strip()
+    user_lower = user_input.lower()
+    
+    scored_paths = []
+    for path in existing_paths:
+        if not path:
+            continue
+        
+        path_lower = path.lower()
+        lcp = get_lcp_length(user_input, path)
+        
+        if lcp == 0:
+            continue
+        
+        is_prefix = path_lower.startswith(user_lower) or user_lower.startswith(path_lower)
+        is_exact = user_lower == path_lower
+        
+        segments_matched = user_input[:lcp].count("\\") + 1
+        
+        score = (
+            lcp * 10 +
+            (1000 if is_exact else 0) +
+            (500 if is_prefix else 0) +
+            segments_matched * 5
+        )
+        
+        scored_paths.append((score, lcp, path, is_exact))
+    
+    scored_paths.sort(key=lambda x: (-x[0], -x[1]))
+    
+    results = []
+    for score, lcp, path, is_exact in scored_paths[:max_results]:
+        results.append(path)
+    
+    return results
+
+
+class AutocompleteLineEdit(QLineEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.main_window = None
+        self.suggestion_list = None
+        self.debounce_timer = QTimer()
+        self.debounce_timer.setSingleShot(True)
+        self.debounce_timer.timeout.connect(self._do_autocomplete)
+        
+        self.textChanged.connect(self._on_text_changed)
+    
+    def set_main_window(self, main_window):
+        self.main_window = main_window
+        
+        self.suggestion_list = QListWidget(main_window)
+        self.suggestion_list.setWindowFlags(Qt.WindowType.ToolTip)
+        self.suggestion_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.suggestion_list.setMaximumHeight(150)
+        self.suggestion_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #555;
+                font-family: Consolas, monospace;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 4px 8px;
+            }
+            QListWidget::item:hover {
+                background-color: #3a3a3a;
+            }
+            QListWidget::item:selected {
+                background-color: #0078d4;
+                color: white;
+            }
+        """)
+        self.suggestion_list.itemClicked.connect(self._on_suggestion_clicked)
+        self.suggestion_list.hide()
+    
+    def _on_text_changed(self, text):
+        self.debounce_timer.stop()
+        if text.strip():
+            self.debounce_timer.start(AUTOCOMPLETE_DEBOUNCE_MS)
+        else:
+            self._hide_suggestions()
+    
+    def _do_autocomplete(self):
+        if not self.main_window or not self.suggestion_list:
+            return
+        
+        user_input = self.text().strip()
+        if not user_input:
+            self._hide_suggestions()
+            return
+        
+        existing_paths = []
+        for i in range(self.main_window.list_filters.count()):
+            existing_paths.append(self.main_window.list_filters.item(i).text())
+        
+        suggestions = get_path_suggestions(user_input, existing_paths, AUTOCOMPLETE_MAX_SUGGESTIONS)
+        
+        if not suggestions:
+            self._hide_suggestions()
+            return
+        
+        self.suggestion_list.clear()
+        user_lower = user_input.lower()
+        
+        for path in suggestions:
+            item = QListWidgetItem()
+            
+            if path.lower() == user_lower:
+                item.setText(f"[Exact] {path}")
+            elif path.lower().startswith(user_lower):
+                item.setText(f"[Prefix] {path}")
+            elif user_lower.startswith(path.lower()):
+                item.setText(f"[Parent] {path}")
+            else:
+                item.setText(path)
+            
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.suggestion_list.addItem(item)
+        
+        self._show_suggestions()
+    
+    def _show_suggestions(self):
+        if not self.suggestion_list or self.suggestion_list.count() == 0:
+            return
+        
+        global_pos = self.mapToGlobal(self.rect().bottomLeft())
+        self.suggestion_list.move(global_pos)
+        self.suggestion_list.setFixedWidth(self.width())
+        self.suggestion_list.show()
+        self.suggestion_list.raise_()
+    
+    def _hide_suggestions(self):
+        if self.suggestion_list:
+            self.suggestion_list.hide()
+    
+    def _on_suggestion_clicked(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path:
+            self.setText(path)
+        self._hide_suggestions()
+        self.setFocus()
+    
+    def keyPressEvent(self, event: QKeyEvent):
+        if not self.suggestion_list or not self.suggestion_list.isVisible():
+            super().keyPressEvent(event)
+            return
+        
+        if event.key() == Qt.Key.Key_Down:
+            current = self.suggestion_list.currentRow()
+            if current < self.suggestion_list.count() - 1:
+                self.suggestion_list.setCurrentRow(current + 1)
+            elif current == -1 and self.suggestion_list.count() > 0:
+                self.suggestion_list.setCurrentRow(0)
+            return
+        
+        elif event.key() == Qt.Key.Key_Up:
+            current = self.suggestion_list.currentRow()
+            if current > 0:
+                self.suggestion_list.setCurrentRow(current - 1)
+            return
+        
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            current_item = self.suggestion_list.currentItem()
+            if current_item:
+                path = current_item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    self.setText(path)
+                self._hide_suggestions()
+                return
+            else:
+                self._hide_suggestions()
+                super().keyPressEvent(event)
+                return
+        
+        elif event.key() == Qt.Key.Key_Escape:
+            self._hide_suggestions()
+            return
+        
+        elif event.key() == Qt.Key.Key_Tab:
+            current_item = self.suggestion_list.currentItem()
+            if current_item:
+                path = current_item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    self.setText(path)
+                self._hide_suggestions()
+            return
+        
+        super().keyPressEvent(event)
+    
+    def focusOutEvent(self, event):
+        QTimer.singleShot(100, self._hide_suggestions)
+        super().focusOutEvent(event)
 
 class RegistryTableModel(QAbstractTableModel):
     def __init__(self):
@@ -118,6 +333,7 @@ class MainWindow(QMainWindow):
         self.init_ui()
         self.load_config()
         self.init_worker()
+        self.ent_add_filter.set_main_window(self)
 
     def load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -162,7 +378,7 @@ class MainWindow(QMainWindow):
         # 1. Add Filter Section (Distinct place to add)
         add_filter_group = QGroupBox("Add Path to Filter")
         add_filter_layout = QHBoxLayout()
-        self.ent_add_filter = QLineEdit()
+        self.ent_add_filter = AutocompleteLineEdit()
         self.ent_add_filter.setPlaceholderText("Enter registry path to exclude (e.g., HKEY_LOCAL_MACHINE\\SOFTWARE\\...)")
         self.ent_add_filter.returnPressed.connect(self.add_current_path_to_filter)
         add_filter_layout.addWidget(self.ent_add_filter)
