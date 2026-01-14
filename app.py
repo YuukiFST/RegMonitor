@@ -26,19 +26,27 @@ class RegistryTableModel(QAbstractTableModel):
         return len(self.headers)
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+        if not index.isValid():
             return None
         
         event = self.events[index.row()]
         col = index.column()
         
-        if col == 0: return event.get("timestamp")
-        if col == 1: return event.get("change_type")
-        if col == 2: return event.get("key_path")
-        if col == 3: return event.get("value_name")
-        if col == 4: return event.get("data_type")
-        if col == 5: return str(event.get("old_value", ""))
-        if col == 6: return str(event.get("new_value", ""))
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0: return event.get("timestamp")
+            if col == 1: return event.get("change_type")
+            if col == 2: return event.get("key_path")
+            if col == 3: return event.get("value_name")
+            if col == 4: return event.get("data_type")
+            if col == 5: return str(event.get("old_value", ""))
+            if col == 6: return str(event.get("new_value", ""))
+        
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if col == 2: return event.get("key_path")
+            if col == 3: return event.get("value_name")
+            if col == 5: return str(event.get("old_value", ""))
+            if col == 6: return str(event.get("new_value", ""))
+            
         return None
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
@@ -140,7 +148,18 @@ class MainWindow(QMainWindow):
         self.model = RegistryTableModel()
         self.table = QTableView()
         self.table.setModel(self.model)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        
+        # Configure headers
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents) # Timestamp
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents) # Type
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)          # Key Path
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents) # Value Name
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents) # Data Type
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)          # Old Value
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)          # New Value
+        
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSortingEnabled(False) # For performance, keeping it simple
         layout.addWidget(self.table)
