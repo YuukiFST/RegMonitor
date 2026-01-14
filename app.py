@@ -5,8 +5,9 @@ import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
-    QMessageBox, QHeaderView, QAbstractItemView, QTextEdit
+    QMessageBox, QHeaderView, QAbstractItemView, QTextEdit, QMenu
 )
+from PyQt6.QtGui import QAction
 from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer
 
 # Constants
@@ -171,6 +172,11 @@ class MainWindow(QMainWindow):
         
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSortingEnabled(False) # For performance, keeping it simple
+        
+        # Context menu for copying
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
+        
         layout.addWidget(self.table)
 
         # Timer for stats update
@@ -221,6 +227,69 @@ class MainWindow(QMainWindow):
         status = "Monitoring" if self.monitoring else "Idle"
         self.lbl_stats.setText(f"Status: {status}\nChanges: {self.total_changes}\nChanges/sec: {self.changes_last_sec}\nFiltered: {self.filtered_count}")
         self.changes_last_sec = 0
+
+    def show_context_menu(self, pos):
+        index = self.table.indexAt(pos)
+        if not index.isValid():
+            return
+
+        menu = QMenu(self)
+        
+        # Action to copy the path
+        copy_path_action = QAction("Copy Path", self)
+        copy_path_action.triggered.connect(lambda: self.copy_to_clipboard(index, 2)) # Column 2 is Key Path
+        menu.addAction(copy_path_action)
+        
+        # Action to copy the value name
+        copy_val_action = QAction("Copy Value Name", self)
+        copy_val_action.triggered.connect(lambda: self.copy_to_clipboard(index, 3)) # Column 3 is Value Name
+        menu.addAction(copy_val_action)
+
+        # Action to copy the full row
+        copy_row_action = QAction("Copy Full Row", self)
+        copy_row_action.triggered.connect(lambda: self.copy_row_to_clipboard(index.row()))
+        menu.addAction(copy_row_action)
+        
+        menu.addSeparator()
+
+        # Action to add to exclude filter
+        exclude_action = QAction("Add to Exclude Filter", self)
+        exclude_action.triggered.connect(lambda: self.add_to_exclude(index))
+        menu.addAction(exclude_action)
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def copy_to_clipboard(self, index, column=None):
+        if column is not None:
+            # Get data from specific column regardless of which cell was clicked
+            path_index = self.model.index(index.row(), column)
+            text = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
+        else:
+            text = self.model.data(index, Qt.ItemDataRole.DisplayRole)
+            
+        if text:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(str(text))
+
+    def copy_row_to_clipboard(self, row):
+        row_data = []
+        for col in range(self.model.columnCount()):
+            idx = self.model.index(row, col)
+            val = self.model.data(idx, Qt.ItemDataRole.DisplayRole)
+            row_data.append(str(val))
+        
+        text = "\t".join(row_data)
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text)
+
+    def add_to_exclude(self, index):
+        path_index = self.model.index(index.row(), 2)
+        path = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
+        if path:
+            current_filter = self.txt_filter.toPlainText().strip()
+            if path not in current_filter:
+                new_filter = current_filter + ("\n" if current_filter else "") + path
+                self.txt_filter.setPlainText(new_filter)
 
     def clear_events(self):
         self.model.clear()
