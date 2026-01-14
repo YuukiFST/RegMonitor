@@ -6,7 +6,7 @@ import csv
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
-    QMessageBox, QHeaderView, QAbstractItemView
+    QMessageBox, QHeaderView, QAbstractItemView, QTextEdit
 )
 from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer
 
@@ -134,15 +134,25 @@ class MainWindow(QMainWindow):
         self.btn_export_reg.clicked.connect(self.export_reg)
         ctrl_layout.addWidget(self.btn_export_reg)
 
-        self.btn_export_csv = QPushButton("Export to CSV")
-        self.btn_export_csv.clicked.connect(self.export_csv)
-        ctrl_layout.addWidget(self.btn_export_csv)
-
         layout.addLayout(ctrl_layout)
 
-        # Stats
-        self.lbl_stats = QLabel("Status: Idle | Changes: 0 | Changes/sec: 0")
-        layout.addWidget(self.lbl_stats)
+        # Filters and Stats Row
+        filter_stats_layout = QHBoxLayout()
+        
+        filter_box = QVBoxLayout()
+        filter_box.addWidget(QLabel("Excluded Paths (one per line):"))
+        self.txt_filter = QTextEdit()
+        self.txt_filter.setPlaceholderText("HKEY_CURRENT_USER\\Software\\Microsoft\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Google")
+        self.txt_filter.setMaximumHeight(80)
+        filter_box.addWidget(self.txt_filter)
+        filter_stats_layout.addLayout(filter_box, 2)
+
+        stats_box = QVBoxLayout()
+        self.lbl_stats = QLabel("Status: Idle\nChanges: 0\nChanges/sec: 0\nFiltered: 0")
+        stats_box.addWidget(self.lbl_stats)
+        filter_stats_layout.addLayout(stats_box, 1)
+
+        layout.addLayout(filter_stats_layout)
 
         # Table
         self.model = RegistryTableModel()
@@ -196,10 +206,16 @@ class MainWindow(QMainWindow):
 
     def on_events_received(self, events):
         # Apply local filtering if needed
-        filter_text = self.txt_filter.text()
+        filter_text = self.txt_filter.toPlainText().strip()
         if filter_text:
-            filtered = [e for e in events if filter_text not in e.get("key_path", "")]
-            self.filtered_count += len(events) - len(filtered)
+            filters = [f.strip() for f in filter_text.split("\n") if f.strip()]
+            filtered = []
+            for e in events:
+                key_path = e.get("key_path", "")
+                if any(f in key_path for f in filters):
+                    self.filtered_count += 1
+                else:
+                    filtered.append(e)
             events = filtered
         
         if events:
@@ -212,7 +228,7 @@ class MainWindow(QMainWindow):
 
     def update_stats_display(self):
         status = "Monitoring" if self.monitoring else "Idle"
-        self.lbl_stats.setText(f"Status: {status} | Changes: {self.total_changes} | Changes/sec: {self.changes_last_sec} | Filtered: {self.filtered_count}")
+        self.lbl_stats.setText(f"Status: {status}\nChanges: {self.total_changes}\nChanges/sec: {self.changes_last_sec}\nFiltered: {self.filtered_count}")
         self.changes_last_sec = 0
 
     def clear_events(self):
@@ -220,30 +236,6 @@ class MainWindow(QMainWindow):
         self.total_changes = 0
         self.filtered_count = 0
         self.update_stats_display()
-
-    def export_csv(self):
-        if not self.model.events:
-            QMessageBox.warning(self, "Export", "No events to export.")
-            return
-        
-        path, _ = QFileDialog.getSaveFileName(self, "Save CSV", "", "CSV Files (*.csv)")
-        if path:
-            with open(path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.DictWriter(f, fieldnames=self.model.headers)
-                writer.writeheader()
-                for e in self.model.events:
-                    # Map keys to headers
-                    row = {
-                        "Timestamp": e.get("timestamp"),
-                        "Type": e.get("change_type"),
-                        "Key Path": e.get("key_path"),
-                        "Value Name": e.get("value_name"),
-                        "Data Type": e.get("data_type"),
-                        "Old Value": e.get("old_value"),
-                        "New Value": e.get("new_value")
-                    }
-                    writer.writerow(row)
-            QMessageBox.information(self, "Export", f"Exported {len(self.model.events)} events to CSV.")
 
     def format_reg_value(self, data_type, value):
         if data_type == "REG_DWORD":
@@ -318,8 +310,11 @@ class MainWindow(QMainWindow):
                 f.write(f";   MODIFIED values: {counts['MODIFIED']}\n")
                 f.write(f";   DELETED values: {counts['DELETED']}\n")
                 f.write(f";   TOTAL changes: {sum(counts.values())}\n")
-                if self.txt_filter.text():
-                    f.write(f"; Filters Applied: {self.txt_filter.text()}\n")
+                filter_text = self.txt_filter.toPlainText().strip()
+                if filter_text:
+                    f.write(f"; Filters Applied:\n")
+                    for line in filter_text.split("\n"):
+                        f.write(f";   - {line.strip()}\n")
                 f.write(";==================================================\n\n")
 
                 # Section 1: NEW
