@@ -123,14 +123,24 @@ class MainWindow(QMainWindow):
             try:
                 with open(CONFIG_FILE, "r") as f:
                     config = json.load(f)
-                    filters = config.get("filters", "")
+                    # Support both new structured format and old string format
+                    if "filtros_paths" in config:
+                        paths = config.get("filtros_paths", [])
+                        filters = "\n".join(paths)
+                    else:
+                        filters = config.get("filters", "")
                     self.txt_filter.setPlainText(filters)
             except Exception as e:
                 print(f"Error loading config: {e}")
 
     def save_config(self):
+        filter_text = self.txt_filter.toPlainText().strip()
+        paths = [p.strip() for p in filter_text.split("\n") if p.strip()]
+        
+        # Save in the structured format requested by user
         config = {
-            "filters": self.txt_filter.toPlainText().strip()
+            "filtros_paths": paths,
+            "dwords_ignoradas": [] # Reserved for future use
         }
         try:
             with open(CONFIG_FILE, "w") as f:
