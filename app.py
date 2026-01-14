@@ -6,7 +6,8 @@ import os
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
-    QMessageBox, QHeaderView, QAbstractItemView, QTextEdit, QMenu
+    QMessageBox, QHeaderView, QAbstractItemView, QTextEdit, QMenu,
+    QListWidget, QGroupBox
 )
 from PyQt6.QtGui import QAction, QCloseEvent
 from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer
@@ -123,24 +124,25 @@ class MainWindow(QMainWindow):
             try:
                 with open(CONFIG_FILE, "r") as f:
                     config = json.load(f)
-                    # Support both new structured format and old string format
                     if "filtros_paths" in config:
                         paths = config.get("filtros_paths", [])
-                        filters = "\n".join(paths)
                     else:
-                        filters = config.get("filters", "")
-                    self.txt_filter.setPlainText(filters)
+                        filters_str = config.get("filters", "")
+                        paths = [p.strip() for p in filters_str.split("\n") if p.strip()]
+                    
+                    self.list_filters.clear()
+                    self.list_filters.addItems(paths)
             except Exception as e:
                 print(f"Error loading config: {e}")
 
     def save_config(self):
-        filter_text = self.txt_filter.toPlainText().strip()
-        paths = [p.strip() for p in filter_text.split("\n") if p.strip()]
+        paths = []
+        for i in range(self.list_filters.count()):
+            paths.append(self.list_filters.item(i).text())
         
-        # Save in the structured format requested by user
         config = {
             "filtros_paths": paths,
-            "dwords_ignoradas": [] # Reserved for future use
+            "dwords_ignoradas": []
         }
         try:
             with open(CONFIG_FILE, "w") as f:
@@ -157,92 +159,84 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
-        # Controls
-        ctrl_layout = QHBoxLayout()
-        self.btn_toggle = QPushButton("Start Monitoring")
-        self.btn_toggle.clicked.connect(self.toggle_monitoring)
-        ctrl_layout.addWidget(self.btn_toggle)
-
-        self.btn_clear = QPushButton("Clear")
-        self.btn_clear.clicked.connect(self.clear_events)
-        ctrl_layout.addWidget(self.btn_clear)
-
-        self.btn_export_reg = QPushButton("Export to .REG")
-        self.btn_export_reg.clicked.connect(self.export_reg)
-        ctrl_layout.addWidget(self.btn_export_reg)
-
-        layout.addLayout(ctrl_layout)
-
-        # Filters and Stats Row
-        filter_stats_layout = QHBoxLayout()
-        
-        filter_box = QVBoxLayout()
-        
-        # Add Path section
+        # 1. Add Filter Section (Distinct place to add)
+        add_filter_group = QGroupBox("Add Path to Filter")
         add_filter_layout = QHBoxLayout()
-        add_filter_layout.addWidget(QLabel("Add Path to Filter:"))
         self.ent_add_filter = QLineEdit()
-        self.ent_add_filter.setPlaceholderText("Enter registry path to exclude...")
+        self.ent_add_filter.setPlaceholderText("Enter registry path to exclude (e.g., HKEY_LOCAL_MACHINE\\SOFTWARE\\...)")
         self.ent_add_filter.returnPressed.connect(self.add_current_path_to_filter)
         add_filter_layout.addWidget(self.ent_add_filter)
         
         self.btn_add_filter = QPushButton("Add Path")
         self.btn_add_filter.clicked.connect(self.add_current_path_to_filter)
         add_filter_layout.addWidget(self.btn_add_filter)
-        filter_box.addLayout(add_filter_layout)
+        add_filter_group.setLayout(add_filter_layout)
+        layout.addWidget(add_filter_group)
 
-        # See Paths section
-        filter_box.addWidget(QLabel("Excluded Paths (one per line):"))
-        self.txt_filter = QTextEdit()
-        self.txt_filter.setPlaceholderText("HKEY_CURRENT_USER\\Software\\Microsoft\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Google")
-        self.txt_filter.setMaximumHeight(80)
-        filter_box.addWidget(self.txt_filter)
+        # 2. Main Row: Controls and Stats
+        top_row = QHBoxLayout()
+        
+        ctrl_layout = QHBoxLayout()
+        self.btn_toggle = QPushButton("Start Monitoring")
+        self.btn_toggle.clicked.connect(self.toggle_monitoring)
+        ctrl_layout.addWidget(self.btn_toggle)
+
+        self.btn_clear = QPushButton("Clear Events")
+        self.btn_clear.clicked.connect(self.clear_events)
+        ctrl_layout.addWidget(self.btn_clear)
+
+        self.btn_export_reg = QPushButton("Export to .REG")
+        self.btn_export_reg.clicked.connect(self.export_reg)
+        ctrl_layout.addWidget(self.btn_export_reg)
+        top_row.addLayout(ctrl_layout, 2)
+
+        self.lbl_stats = QLabel("Status: Idle | Changes: 0 | Filtered: 0")
+        top_row.addWidget(self.lbl_stats, 1)
+        layout.addLayout(top_row)
+
+        # 3. View Filter Section (Distinct place to see)
+        view_filter_group = QGroupBox("Excluded Paths (Filters)")
+        view_filter_layout = QVBoxLayout()
+        
+        self.list_filters = QListWidget()
+        self.list_filters.setToolTip("Select a path and press Delete or use the button below to remove it.")
+        view_filter_layout.addWidget(self.list_filters)
         
         filter_btn_layout = QHBoxLayout()
-        self.btn_save_config = QPushButton("Save Filter Config")
-        self.btn_save_config.clicked.connect(self.save_config)
-        filter_btn_layout.addWidget(self.btn_save_config)
+        self.btn_remove_filter = QPushButton("Remove Selected Filter")
+        self.btn_remove_filter.clicked.connect(self.remove_selected_filter)
+        filter_btn_layout.addWidget(self.btn_remove_filter)
         
-        self.btn_clear_filter = QPushButton("Clear Filters")
-        self.btn_clear_filter.clicked.connect(lambda: self.txt_filter.clear())
+        self.btn_clear_filter = QPushButton("Clear All Filters")
+        self.btn_clear_filter.clicked.connect(lambda: (self.list_filters.clear(), self.save_config()))
         filter_btn_layout.addWidget(self.btn_clear_filter)
         
-        filter_box.addLayout(filter_btn_layout)
-        filter_stats_layout.addLayout(filter_box, 2)
+        view_filter_layout.addLayout(filter_btn_layout)
+        view_filter_group.setLayout(view_filter_layout)
+        view_filter_group.setMaximumHeight(200) # Keep it compact
+        layout.addWidget(view_filter_group)
 
-        stats_box = QVBoxLayout()
-        self.lbl_stats = QLabel("Status: Idle\nChanges: 0\nChanges/sec: 0\nFiltered: 0")
-        stats_box.addWidget(self.lbl_stats)
-        filter_stats_layout.addLayout(stats_box, 1)
-
-        layout.addLayout(filter_stats_layout)
-
-        # Table
+        # 4. Table
         self.model = RegistryTableModel()
         self.table = QTableView()
         self.table.setModel(self.model)
         
-        # Configure headers
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents) # Timestamp
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents) # Type
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)          # Key Path
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents) # Value Name
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents) # Data Type
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)          # Old Value
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)          # New Value
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSortingEnabled(False) # For performance, keeping it simple
-        
-        # Context menu for copying
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
         
         layout.addWidget(self.table)
 
-        # Timer for stats update
         self.stats_timer = QTimer()
         self.stats_timer.timeout.connect(self.update_stats_display)
         self.stats_timer.start(1000)
@@ -253,22 +247,21 @@ class MainWindow(QMainWindow):
         self.worker.events_received.connect(self.on_events_received)
         self.worker.stats_updated.connect(self.on_stats_updated)
 
-    def toggle_monitoring(self):
-        if not self.monitoring:
-            self.worker.start()
-            self.btn_toggle.setText("Stop Monitoring")
-            self.monitoring = True
-            self.start_time = datetime.datetime.now()
-        else:
-            self.worker.stop()
-            self.btn_toggle.setText("Start Monitoring")
-            self.monitoring = False
+    def remove_selected_filter(self):
+        selected_items = self.list_filters.selectedItems()
+        if not selected_items:
+            return
+        for item in selected_items:
+            self.list_filters.takeItem(self.list_filters.row(item))
+        self.save_config()
 
     def on_events_received(self, events):
-        # Apply local filtering if needed
-        filter_text = self.txt_filter.toPlainText().strip()
-        if filter_text:
-            filters = [f.strip() for f in filter_text.split("\n") if f.strip()]
+        # Apply local filtering
+        filters = []
+        for i in range(self.list_filters.count()):
+            filters.append(self.list_filters.item(i).text())
+
+        if filters:
             filtered = []
             for e in events:
                 key_path = e.get("key_path", "")
@@ -288,7 +281,7 @@ class MainWindow(QMainWindow):
 
     def update_stats_display(self):
         status = "Monitoring" if self.monitoring else "Idle"
-        self.lbl_stats.setText(f"Status: {status}\nChanges: {self.total_changes}\nChanges/sec: {self.changes_last_sec}\nFiltered: {self.filtered_count}")
+        self.lbl_stats.setText(f"Status: {status} | Changes: {self.total_changes} | Filtered: {self.filtered_count}")
         self.changes_last_sec = 0
 
     def show_context_menu(self, pos):
@@ -298,24 +291,20 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
         
-        # Action to copy the path
         copy_path_action = QAction("Copy Path", self)
-        copy_path_action.triggered.connect(lambda: self.copy_to_clipboard(index, 2)) # Column 2 is Key Path
+        copy_path_action.triggered.connect(lambda: self.copy_to_clipboard(index, 2))
         menu.addAction(copy_path_action)
         
-        # Action to copy the value name
         copy_val_action = QAction("Copy Value Name", self)
-        copy_val_action.triggered.connect(lambda: self.copy_to_clipboard(index, 3)) # Column 3 is Value Name
+        copy_val_action.triggered.connect(lambda: self.copy_to_clipboard(index, 3))
         menu.addAction(copy_val_action)
 
-        # Action to copy the full row
         copy_row_action = QAction("Copy Full Row", self)
         copy_row_action.triggered.connect(lambda: self.copy_row_to_clipboard(index.row()))
         menu.addAction(copy_row_action)
         
         menu.addSeparator()
 
-        # Action to add to exclude filter
         exclude_action = QAction("Add to Exclude Filter", self)
         exclude_action.triggered.connect(lambda: self.add_to_exclude(index))
         menu.addAction(exclude_action)
@@ -324,7 +313,6 @@ class MainWindow(QMainWindow):
 
     def copy_to_clipboard(self, index, column=None):
         if column is not None:
-            # Get data from specific column regardless of which cell was clicked
             path_index = self.model.index(index.row(), column)
             text = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
         else:
@@ -349,21 +337,23 @@ class MainWindow(QMainWindow):
         path_index = self.model.index(index.row(), 2)
         path = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
         if path:
-            current_filter = self.txt_filter.toPlainText().strip()
-            if path not in current_filter:
-                new_filter = current_filter + ("\n" if current_filter else "") + path
-                self.txt_filter.setPlainText(new_filter)
+            existing_paths = []
+            for i in range(self.list_filters.count()):
+                existing_paths.append(self.list_filters.item(i).text())
+            
+            if path not in existing_paths:
+                self.list_filters.addItem(path)
                 self.save_config()
 
     def add_current_path_to_filter(self):
         path = self.ent_add_filter.text().strip()
         if path:
-            current_filter = self.txt_filter.toPlainText().strip()
-            # Check if path already exists in filter to avoid duplicates
-            existing_paths = [p.strip() for p in current_filter.split("\n") if p.strip()]
+            existing_paths = []
+            for i in range(self.list_filters.count()):
+                existing_paths.append(self.list_filters.item(i).text())
+                
             if path not in existing_paths:
-                new_filter = current_filter + ("\n" if current_filter else "") + path
-                self.txt_filter.setPlainText(new_filter)
+                self.list_filters.addItem(path)
                 self.ent_add_filter.clear()
                 self.save_config()
             else:
@@ -384,12 +374,10 @@ class MainWindow(QMainWindow):
         elif data_type == "REG_QWORD":
             try:
                 val = int(value)
-                # QWORD is hex(b):XX,XX,XX,XX,XX,XX,XX,XX (little endian)
                 b = val.to_bytes(8, byteorder='little')
                 return "hex(b):" + ",".join(f"{x:02x}" for x in b)
             except: return 'hex(b):00,00,00,00,00,00,00,00'
         elif data_type == "REG_SZ":
-            # Escape backslashes and quotes
             val = str(value).replace("\\", "\\\\").replace('"', '\\"')
             return f'"{val}"'
         else:
@@ -404,7 +392,6 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
-        # Group by type and path
         sections = {"NEW": {}, "MODIFIED": {}, "DELETED": {}}
         counts = {"NEW": 0, "MODIFIED": 0, "DELETED": 0}
 
@@ -431,11 +418,8 @@ class MainWindow(QMainWindow):
 
         try:
             with open(path, 'w', encoding='utf-16-le') as f:
-                # UTF-16 LE BOM
                 f.write('\ufeff')
                 f.write("Windows Registry Editor Version 5.00\n\n")
-                
-                # Header
                 f.write(";==================================================\n")
                 f.write("; WINDOWS REGISTRY MONITOR - EXPORT REPORT\n")
                 f.write(";==================================================\n")
@@ -448,12 +432,14 @@ class MainWindow(QMainWindow):
                 f.write(f";   MODIFIED values: {counts['MODIFIED']}\n")
                 f.write(f";   DELETED values: {counts['DELETED']}\n")
                 f.write(f";   TOTAL changes: {sum(counts.values())}\n")
-                filter_text = self.txt_filter.toPlainText().strip()
-                if filter_text:
+                
+                # Use list_filters for the report
+                if self.list_filters.count() > 0:
                     f.write(f"; Filters Applied:\n")
-                    for line in filter_text.split("\n"):
-                        f.write(f";   - {line.strip()}\n")
+                    for i in range(self.list_filters.count()):
+                        f.write(f";   - {self.list_filters.item(i).text()}\n")
                 f.write(";==================================================\n\n")
+
 
                 # Section 1: NEW
                 f.write(";==================================================\n")
