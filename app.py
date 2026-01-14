@@ -2,7 +2,6 @@ import sys
 import json
 import zmq
 import datetime
-import csv
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
@@ -173,14 +172,6 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSortingEnabled(False) # For performance, keeping it simple
         layout.addWidget(self.table)
-
-        # Filter List
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Exclusion Filter (Path):"))
-        self.txt_filter = QLineEdit()
-        self.txt_filter.setPlaceholderText("e.g. HKEY_CURRENT_USER\\Software\\Microsoft")
-        filter_layout.addWidget(self.txt_filter)
-        layout.addLayout(filter_layout)
 
         # Timer for stats update
         self.stats_timer = QTimer()
