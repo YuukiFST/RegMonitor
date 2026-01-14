@@ -3,7 +3,12 @@
         "HKEY_CURRENT_USER\\Software\\AMD\\HKIDs",
         "HKEY_CURRENT_USER\\Software\\Thorium",
         "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\BITS",
-        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits"
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\SecureTimeLimits",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\W32Time\\SecureTimeLimits",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SOFTWARE\\Microsoft\\IdentityCRL\\ClockData",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SOFTWARE\\Microsoft\\IdentityCRL\\NegativeCache",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SOFTWARE\\Microsoft\\IdentityCRL\\ThrottleCache"
     ],
     "dwords_ignoradas": []
 }
