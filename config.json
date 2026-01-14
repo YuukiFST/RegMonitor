@@ -1,4 +1,10 @@
 {
-    "filtros_paths": [],
+    "filtros_paths": [
+        "HKEY_CURRENT_USER\\Software\\AMD\\HKIDs",
+        "HKEY_CURRENT_USER\\Software\\Thorium\\StabilityMetrics",
+        "HKEY_CURRENT_USER\\Software\\Thorium",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\W32Time\\SecureTimeLimits",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\BITS"
+    ],
     "dwords_ignoradas": []
 }

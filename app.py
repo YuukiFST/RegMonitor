@@ -32,6 +32,43 @@ def get_lcp_length(s1: str, s2: str) -> int:
     return lcp
 
 
+def normalize_path(path: str) -> str:
+    return path.strip().rstrip("\\").lower()
+
+
+def is_child_of(child_path: str, parent_path: str) -> bool:
+    child_norm = normalize_path(child_path)
+    parent_norm = normalize_path(parent_path)
+    return child_norm.startswith(parent_norm + "\\")
+
+
+def check_if_child_of_existing(new_path: str, existing_paths: list) -> tuple:
+    new_norm = normalize_path(new_path)
+    for existing in existing_paths:
+        existing_norm = normalize_path(existing)
+        if new_norm.startswith(existing_norm + "\\"):
+            return True, existing
+    return False, None
+
+
+def find_children_of(parent_path: str, existing_paths: list) -> list:
+    parent_norm = normalize_path(parent_path)
+    children = []
+    for existing in existing_paths:
+        existing_norm = normalize_path(existing)
+        if existing_norm.startswith(parent_norm + "\\"):
+            children.append(existing)
+    return children
+
+
+def is_exact_duplicate(new_path: str, existing_paths: list) -> bool:
+    new_norm = normalize_path(new_path)
+    for existing in existing_paths:
+        if normalize_path(existing) == new_norm:
+            return True
+    return False
+
+
 def get_path_suggestions(user_input: str, existing_paths: list, max_results: int = 5) -> list:
     if not user_input or not user_input.strip():
         return []
@@ -565,25 +602,70 @@ class MainWindow(QMainWindow):
         path_index = self.model.index(index.row(), 2)
         path = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
         if path:
-            existing_paths = []
-            for i in range(self.list_filters.count()):
-                existing_paths.append(self.list_filters.item(i).text())
-            
-            if path not in existing_paths:
-                self.list_filters.addItem(path)
-                self.save_config()
+            self.add_path_with_validation(path)
+
+    def show_parent_exists_warning(self, child_path: str, parent_path: str):
+        QMessageBox.warning(
+            self,
+            "Path Already Covered",
+            f"Cannot add:\n{child_path}\n\n"
+            f"Already covered by:\n{parent_path}\n\n"
+            "The parent path already monitors all subkeys."
+        )
+
+    def show_children_removed_info(self, removed_paths: list):
+        if len(removed_paths) <= 10:
+            paths_text = "\n".join(f"• {p}" for p in removed_paths)
+        else:
+            paths_text = "\n".join(f"• {p}" for p in removed_paths[:10])
+            paths_text += f"\n... and {len(removed_paths) - 10} more"
+        
+        QMessageBox.information(
+            self,
+            "Redundant Paths Removed",
+            f"Removed {len(removed_paths)} child path(s):\n\n{paths_text}\n\n"
+            "The new parent path covers these automatically."
+        )
+
+    def add_path_with_validation(self, path: str) -> bool:
+        path = path.strip()
+        if not path:
+            return False
+        
+        existing_paths = []
+        for i in range(self.list_filters.count()):
+            existing_paths.append(self.list_filters.item(i).text())
+        
+        if is_exact_duplicate(path, existing_paths):
+            QMessageBox.warning(self, "Duplicate Path", f"This path already exists in the filter list:\n{path}")
+            return False
+        
+        is_child, parent_path = check_if_child_of_existing(path, existing_paths)
+        if is_child:
+            self.show_parent_exists_warning(path, parent_path)
+            return False
+        
+        children_to_remove = find_children_of(path, existing_paths)
+        
+        if children_to_remove:
+            for child in children_to_remove:
+                items = self.list_filters.findItems(child, Qt.MatchFlag.MatchExactly)
+                for item in items:
+                    self.list_filters.takeItem(self.list_filters.row(item))
+        
+        self.list_filters.addItem(path)
+        self.save_config()
+        
+        if children_to_remove:
+            self.show_children_removed_info(children_to_remove)
+        
+        return True
 
     def add_current_path_to_filter(self):
         path = self.ent_add_filter.text().strip()
         if path:
-            existing_paths = []
-            for i in range(self.list_filters.count()):
-                existing_paths.append(self.list_filters.item(i).text())
-                
-            if path not in existing_paths:
-                self.list_filters.addItem(path)
+            if self.add_path_with_validation(path):
                 self.ent_add_filter.clear()
-                self.save_config()
             else:
                 self.ent_add_filter.clear()
 
