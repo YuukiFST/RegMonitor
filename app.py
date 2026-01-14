@@ -47,7 +47,8 @@ class RegistryTableModel(QAbstractTableModel):
         return None
 
     def add_events(self, new_events):
-        self.beginInsertRows(None, len(self.events), len(self.events) + len(new_events) - 1)
+        from PyQt6.QtCore import QModelIndex
+        self.beginInsertRows(QModelIndex(), len(self.events), len(self.events) + len(new_events) - 1)
         self.events.extend(new_events)
         # Keep only last 5000 events for performance
         if len(self.events) > 5000:
