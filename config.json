@@ -14,7 +14,11 @@
         "HKEY_CURRENT_USER\\Software\\StartIsBack",
         "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\ControlSet001\\Services\\Tcpip\\Parameters",
         "HKEY_LOCAL_MACHINE\\SOFTWARE\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters",
-        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Search"
+        "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Search",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\COMPONENTS\\DerivedData\\Components",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\COMPONENTS\\CanonicalData\\Deployments",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\COMPONENTS\\CanonicalData\\Catalogs",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\COMPONENTS\\Drivers\\amd64"
     ],
     "dwords_ignoradas": []
 }

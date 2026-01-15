@@ -562,16 +562,21 @@ class MainWindow(QMainWindow):
         self.save_config()
 
     def on_events_received(self, events: list[dict[str, Any]]) -> None:
-        # Apply local filtering
         filters = []
         for i in range(self.list_filters.count()):
-            filters.append(self.list_filters.item(i).text())
+            filters.append(normalize_path(self.list_filters.item(i).text()))
 
         if filters:
             filtered = []
             for e in events:
                 key_path = e.get("key_path", "")
-                if any(f in key_path for f in filters):
+                key_norm = normalize_path(key_path)
+                should_filter = False
+                for f in filters:
+                    if key_norm == f or key_norm.startswith(f + "\\"):
+                        should_filter = True
+                        break
+                if should_filter:
                     self.filtered_count += 1
                 else:
                     filtered.append(e)
