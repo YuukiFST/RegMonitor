@@ -3,6 +3,8 @@ import json
 import zmq
 import datetime
 import os
+import logging
+from typing import Optional, Any
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QPushButton, QTableView, QLabel, QLineEdit, QFileDialog, 
@@ -10,13 +12,20 @@ from PyQt6.QtWidgets import (
     QListWidget, QGroupBox, QListWidgetItem, QFrame
 )
 from PyQt6.QtGui import QAction, QCloseEvent, QKeyEvent
-from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer, QEvent
+from PyQt6.QtCore import Qt, QAbstractTableModel, QThread, pyqtSignal, QTimer, QEvent, QModelIndex
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Constants
 ZMQ_ENDPOINT = "tcp://127.0.0.1:5555"
 CONFIG_FILE = "config.json"
 AUTOCOMPLETE_DEBOUNCE_MS = 300
 AUTOCOMPLETE_MAX_SUGGESTIONS = 5
+MAX_EVENTS = 5000
 
 
 def get_lcp_length(s1: str, s2: str) -> int:
@@ -42,7 +51,7 @@ def is_child_of(child_path: str, parent_path: str) -> bool:
     return child_norm.startswith(parent_norm + "\\")
 
 
-def check_if_child_of_existing(new_path: str, existing_paths: list) -> tuple:
+def check_if_child_of_existing(new_path: str, existing_paths: list[str]) -> tuple[bool, Optional[str]]:
     new_norm = normalize_path(new_path)
     for existing in existing_paths:
         existing_norm = normalize_path(existing)
@@ -51,7 +60,7 @@ def check_if_child_of_existing(new_path: str, existing_paths: list) -> tuple:
     return False, None
 
 
-def find_children_of(parent_path: str, existing_paths: list) -> list:
+def find_children_of(parent_path: str, existing_paths: list[str]) -> list[str]:
     parent_norm = normalize_path(parent_path)
     children = []
     for existing in existing_paths:
@@ -61,7 +70,7 @@ def find_children_of(parent_path: str, existing_paths: list) -> list:
     return children
 
 
-def is_exact_duplicate(new_path: str, existing_paths: list) -> bool:
+def is_exact_duplicate(new_path: str, existing_paths: list[str]) -> bool:
     new_norm = normalize_path(new_path)
     for existing in existing_paths:
         if normalize_path(existing) == new_norm:
@@ -69,7 +78,7 @@ def is_exact_duplicate(new_path: str, existing_paths: list) -> bool:
     return False
 
 
-def get_path_suggestions(user_input: str, existing_paths: list, max_results: int = 5) -> list:
+def get_path_suggestions(user_input: str, existing_paths: list[str], max_results: int = 5) -> list[str]:
     if not user_input or not user_input.strip():
         return []
     
@@ -111,17 +120,17 @@ def get_path_suggestions(user_input: str, existing_paths: list, max_results: int
 
 
 class AutocompleteLineEdit(QLineEdit):
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.main_window = None
-        self.suggestion_list = None
+        self.main_window: Optional["MainWindow"] = None
+        self.suggestion_list: Optional[QListWidget] = None
         self.debounce_timer = QTimer()
         self.debounce_timer.setSingleShot(True)
         self.debounce_timer.timeout.connect(self._do_autocomplete)
         
         self.textChanged.connect(self._on_text_changed)
     
-    def set_main_window(self, main_window):
+    def set_main_window(self, main_window: "MainWindow") -> None:
         self.main_window = main_window
         
         self.suggestion_list = QListWidget(main_window)
@@ -150,14 +159,14 @@ class AutocompleteLineEdit(QLineEdit):
         self.suggestion_list.itemClicked.connect(self._on_suggestion_clicked)
         self.suggestion_list.hide()
     
-    def _on_text_changed(self, text):
+    def _on_text_changed(self, text: str) -> None:
         self.debounce_timer.stop()
         if text.strip():
             self.debounce_timer.start(AUTOCOMPLETE_DEBOUNCE_MS)
         else:
             self._hide_suggestions()
     
-    def _do_autocomplete(self):
+    def _do_autocomplete(self) -> None:
         if not self.main_window or not self.suggestion_list:
             return
         
@@ -196,7 +205,7 @@ class AutocompleteLineEdit(QLineEdit):
         
         self._show_suggestions()
     
-    def _show_suggestions(self):
+    def _show_suggestions(self) -> None:
         if not self.suggestion_list or self.suggestion_list.count() == 0:
             return
         
@@ -206,18 +215,18 @@ class AutocompleteLineEdit(QLineEdit):
         self.suggestion_list.show()
         self.suggestion_list.raise_()
     
-    def _hide_suggestions(self):
+    def _hide_suggestions(self) -> None:
         if self.suggestion_list:
             self.suggestion_list.hide()
     
-    def _on_suggestion_clicked(self, item):
+    def _on_suggestion_clicked(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
         if path:
             self.setText(path)
         self._hide_suggestions()
         self.setFocus()
     
-    def keyPressEvent(self, event: QKeyEvent):
+    def keyPressEvent(self, event: QKeyEvent) -> None:
         if not self.suggestion_list or not self.suggestion_list.isVisible():
             super().keyPressEvent(event)
             return
@@ -264,23 +273,23 @@ class AutocompleteLineEdit(QLineEdit):
         
         super().keyPressEvent(event)
     
-    def focusOutEvent(self, event):
+    def focusOutEvent(self, event: QEvent) -> None:
         QTimer.singleShot(100, self._hide_suggestions)
         super().focusOutEvent(event)
 
 class RegistryTableModel(QAbstractTableModel):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.headers = ["Timestamp", "Type", "Key Path", "Value Name", "Data Type", "Old Value", "New Value"]
-        self.events = []
+        self.headers: list[str] = ["Timestamp", "Type", "Key Path", "Value Name", "Data Type", "Old Value", "New Value"]
+        self.events: list[dict[str, Any]] = []
 
-    def rowCount(self, parent=None):
+    def rowCount(self, parent: Optional[QModelIndex] = None) -> int:
         return len(self.events)
 
-    def columnCount(self, parent=None):
+    def columnCount(self, parent: Optional[QModelIndex] = None) -> int:
         return len(self.headers)
 
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
         
@@ -304,22 +313,21 @@ class RegistryTableModel(QAbstractTableModel):
             
         return None
 
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.headers[section]
         return None
 
-    def add_events(self, new_events):
+    def add_events(self, new_events: list[dict[str, Any]]) -> None:
         from PyQt6.QtCore import QModelIndex
         self.beginInsertRows(QModelIndex(), len(self.events), len(self.events) + len(new_events) - 1)
         self.events.extend(new_events)
-        # Keep only last 5000 events for performance
-        if len(self.events) > 5000:
-            overflow = len(self.events) - 5000
+        if len(self.events) > MAX_EVENTS:
+            overflow = len(self.events) - MAX_EVENTS
             self.events = self.events[overflow:]
         self.endInsertRows()
 
-    def clear(self):
+    def clear(self) -> None:
         self.beginResetModel()
         self.events = []
         self.endResetModel()
@@ -347,51 +355,61 @@ class ZMQSubscriberThread(QThread):
     events_received = pyqtSignal(list)
     stats_updated = pyqtSignal(int)
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.running = False
-        self.context = zmq.Context()
-        self.subscriber = self.context.socket(zmq.SUB)
+        self.running: bool = False
+        self.context: zmq.Context = zmq.Context()
+        self.subscriber: zmq.Socket = self.context.socket(zmq.SUB)
+        self.subscriber.setsockopt(zmq.LINGER, 0)
 
-    def run(self):
+    def run(self) -> None:
         self.subscriber.connect(ZMQ_ENDPOINT)
         self.subscriber.setsockopt_string(zmq.SUBSCRIBE, "")
         self.running = True
         
         while self.running:
             try:
-                # Use poller to avoid blocking indefinitely and allow graceful shutdown
                 if self.subscriber.poll(100):
                     message = self.subscriber.recv_json()
                     events = message.get("events", [])
                     if events:
                         self.events_received.emit(events)
                         self.stats_updated.emit(len(events))
+            except zmq.ZMQError as e:
+                if self.running:
+                    logger.error(f"ZMQ Error: {e}")
+                    self.msleep(100)
             except Exception as e:
-                print(f"ZMQ Error: {e}")
-                self.msleep(100)
+                if self.running:
+                    logger.error(f"Error: {e}")
+                    self.msleep(100)
 
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
-        self.wait()
+        self.wait(2000)
+        try:
+            self.subscriber.close()
+            self.context.term()
+        except Exception:
+            pass
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Windows Registry Monitor")
         self.resize(1200, 800)
 
-        self.total_changes = 0
-        self.filtered_count = 0
-        self.start_time = None
-        self.monitoring = False
+        self.total_changes: int = 0
+        self.filtered_count: int = 0
+        self.start_time: Optional[datetime.datetime] = None
+        self.monitoring: bool = False
 
         self.init_ui()
         self.load_config()
         self.init_worker()
         self.ent_add_filter.set_main_window(self)
 
-    def load_config(self):
+    def load_config(self) -> None:
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
@@ -405,9 +423,9 @@ class MainWindow(QMainWindow):
                     self.list_filters.clear()
                     self.list_filters.addItems(paths)
             except Exception as e:
-                print(f"Error loading config: {e}")
+                logger.error(f"Error loading config: {e}")
 
-    def save_config(self):
+    def save_config(self) -> None:
         paths = []
         for i in range(self.list_filters.count()):
             paths.append(self.list_filters.item(i).text())
@@ -420,13 +438,17 @@ class MainWindow(QMainWindow):
             with open(CONFIG_FILE, "w") as f:
                 json.dump(config, f, indent=4)
         except Exception as e:
-            print(f"Error saving config: {e}")
+            logger.error(f"Error saving config: {e}")
 
-    def closeEvent(self, event: QCloseEvent):
+    def closeEvent(self, event: QCloseEvent) -> None:
         self.save_config()
+        if self.monitoring:
+            self.worker.stop()
+        if hasattr(self, 'ent_add_filter') and self.ent_add_filter.suggestion_list:
+            self.ent_add_filter.suggestion_list.close()
         super().closeEvent(event)
 
-    def init_ui(self):
+    def init_ui(self) -> None:
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
@@ -514,12 +536,12 @@ class MainWindow(QMainWindow):
         self.stats_timer.start(1000)
         self.changes_last_sec = 0
 
-    def init_worker(self):
+    def init_worker(self) -> None:
         self.worker = ZMQSubscriberThread()
         self.worker.events_received.connect(self.on_events_received)
         self.worker.stats_updated.connect(self.on_stats_updated)
 
-    def toggle_monitoring(self):
+    def toggle_monitoring(self) -> None:
         if not self.monitoring:
             self.monitoring = True
             self.start_time = datetime.datetime.now()
@@ -531,7 +553,7 @@ class MainWindow(QMainWindow):
             self.btn_toggle.setText("Start Monitoring")
         self.update_stats_display()
 
-    def remove_selected_filter(self):
+    def remove_selected_filter(self) -> None:
         selected_items = self.list_filters.selectedItems()
         if not selected_items:
             return
@@ -539,7 +561,7 @@ class MainWindow(QMainWindow):
             self.list_filters.takeItem(self.list_filters.row(item))
         self.save_config()
 
-    def on_events_received(self, events):
+    def on_events_received(self, events: list[dict[str, Any]]) -> None:
         # Apply local filtering
         filters = []
         for i in range(self.list_filters.count()):
@@ -559,16 +581,16 @@ class MainWindow(QMainWindow):
             self.model.add_events(events)
             self.table.scrollToBottom()
 
-    def on_stats_updated(self, count):
+    def on_stats_updated(self, count: int) -> None:
         self.total_changes += count
         self.changes_last_sec += count
 
-    def update_stats_display(self):
+    def update_stats_display(self) -> None:
         status = "Monitoring" if self.monitoring else "Idle"
         self.lbl_stats.setText(f"Status: {status} | Changes: {self.total_changes} | Filtered: {self.filtered_count}")
         self.changes_last_sec = 0
 
-    def show_context_menu(self, pos):
+    def show_context_menu(self, pos) -> None:
         index = self.table.indexAt(pos)
         if not index.isValid():
             return
@@ -595,7 +617,7 @@ class MainWindow(QMainWindow):
 
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
-    def copy_to_clipboard(self, index, column=None):
+    def copy_to_clipboard(self, index: QModelIndex, column: Optional[int] = None) -> None:
         if column is not None:
             path_index = self.model.index(index.row(), column)
             text = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
@@ -606,7 +628,7 @@ class MainWindow(QMainWindow):
             clipboard = QApplication.clipboard()
             clipboard.setText(str(text))
 
-    def copy_row_to_clipboard(self, row):
+    def copy_row_to_clipboard(self, row: int) -> None:
         row_data = []
         for col in range(self.model.columnCount()):
             idx = self.model.index(row, col)
@@ -617,13 +639,13 @@ class MainWindow(QMainWindow):
         clipboard = QApplication.clipboard()
         clipboard.setText(text)
 
-    def add_to_exclude(self, index):
+    def add_to_exclude(self, index: QModelIndex) -> None:
         path_index = self.model.index(index.row(), 2)
         path = self.model.data(path_index, Qt.ItemDataRole.DisplayRole)
         if path:
             self.add_path_with_validation(path)
 
-    def show_parent_exists_warning(self, child_path: str, parent_path: str):
+    def show_parent_exists_warning(self, child_path: str, parent_path: str) -> None:
         QMessageBox.warning(
             self,
             "Path Already Covered",
@@ -632,7 +654,7 @@ class MainWindow(QMainWindow):
             "The parent path already monitors all subkeys."
         )
 
-    def show_children_removed_info(self, removed_paths: list):
+    def show_children_removed_info(self, removed_paths: list[str]) -> None:
         if len(removed_paths) <= 10:
             paths_text = "\n".join(f"• {p}" for p in removed_paths)
         else:
@@ -685,7 +707,7 @@ class MainWindow(QMainWindow):
         
         return True
 
-    def add_current_path_to_filter(self):
+    def add_current_path_to_filter(self) -> None:
         path = self.ent_add_filter.text().strip()
         if path:
             if self.add_path_with_validation(path):
@@ -693,13 +715,13 @@ class MainWindow(QMainWindow):
             else:
                 self.ent_add_filter.clear()
 
-    def clear_events(self):
+    def clear_events(self) -> None:
         self.model.clear()
         self.total_changes = 0
         self.filtered_count = 0
         self.update_stats_display()
 
-    def format_reg_value(self, data_type, value):
+    def format_reg_value(self, data_type: str, value: Any) -> str:
         if data_type == "REG_DWORD":
             try:
                 val = int(value)
@@ -717,7 +739,7 @@ class MainWindow(QMainWindow):
         else:
             return '"[Unsupported Type]"'
 
-    def export_reg(self):
+    def export_reg(self) -> None:
         if not self.model.events:
             QMessageBox.warning(self, "Export", "No events to export.")
             return

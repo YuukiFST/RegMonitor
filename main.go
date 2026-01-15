@@ -3,21 +3,80 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
+	"os"
+	"os/signal"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/go-zeromq/zmq4"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
 const (
-	ZMQ_ENDPOINT   = "tcp://127.0.0.1:5555"
-	BATCH_INTERVAL = 100 * time.Millisecond
-	BATCH_SIZE     = 50
+	DefaultZMQEndpoint   = "tcp://127.0.0.1:5555"
+	DefaultBatchInterval = 100 * time.Millisecond
+	DefaultBatchSize     = 50
+	DefaultMaxScanDepth  = 5
+	DefaultEventChanSize = 1000
+	DefaultWaitTimeoutMS = 500
+	DefaultMaxEvents     = 5000
+	ConfigFilePath       = "config.json"
 )
+
+type Config struct {
+	ZMQEndpoint     string   `json:"zmq_endpoint"`
+	BatchIntervalMS int      `json:"batch_interval_ms"`
+	BatchSize       int      `json:"batch_size"`
+	MaxScanDepth    int      `json:"max_scan_depth"`
+	FilterPaths     []string `json:"filtros_paths"`
+}
+
+func loadConfig() *Config {
+	cfg := &Config{
+		ZMQEndpoint:     DefaultZMQEndpoint,
+		BatchIntervalMS: int(DefaultBatchInterval.Milliseconds()),
+		BatchSize:       DefaultBatchSize,
+		MaxScanDepth:    DefaultMaxScanDepth,
+		FilterPaths:     []string{},
+	}
+
+	data, err := os.ReadFile(ConfigFilePath)
+	if err != nil {
+		log.Warn().Err(err).Str("path", ConfigFilePath).Msg("config file not found, using defaults")
+		return cfg
+	}
+
+	if err := json.Unmarshal(data, cfg); err != nil {
+		log.Warn().Err(err).Msg("failed to parse config, using defaults")
+		return cfg
+	}
+
+	if cfg.ZMQEndpoint == "" {
+		cfg.ZMQEndpoint = DefaultZMQEndpoint
+	}
+	if cfg.BatchIntervalMS <= 0 {
+		cfg.BatchIntervalMS = int(DefaultBatchInterval.Milliseconds())
+	}
+	if cfg.BatchSize <= 0 {
+		cfg.BatchSize = DefaultBatchSize
+	}
+	if cfg.MaxScanDepth <= 0 {
+		cfg.MaxScanDepth = DefaultMaxScanDepth
+	}
+
+	log.Info().
+		Str("endpoint", cfg.ZMQEndpoint).
+		Int("batch_size", cfg.BatchSize).
+		Int("filters", len(cfg.FilterPaths)).
+		Msg("config loaded")
+
+	return cfg
+}
 
 type Event struct {
 	Timestamp  string      `json:"timestamp"`
@@ -33,86 +92,174 @@ type Batch struct {
 	Events []Event `json:"events"`
 }
 
+type RegistryCache struct {
+	mu   sync.RWMutex
+	data map[string]map[string]interface{}
+}
+
+func NewRegistryCache() *RegistryCache {
+	return &RegistryCache{
+		data: make(map[string]map[string]interface{}),
+	}
+}
+
+func (c *RegistryCache) Get(path string) (map[string]interface{}, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	v, ok := c.data[path]
+	return v, ok
+}
+
+func (c *RegistryCache) Set(path string, values map[string]interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data[path] = values
+}
+
+func (c *RegistryCache) Delete(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.data, path)
+}
+
+func (c *RegistryCache) Keys() []string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	keys := make([]string, 0, len(c.data))
+	for k := range c.data {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func (c *RegistryCache) ReplaceAll(newData map[string]map[string]interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.data = newData
+}
+
+func (c *RegistryCache) Snapshot() map[string]map[string]interface{} {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	snapshot := make(map[string]map[string]interface{}, len(c.data))
+	for k, v := range c.data {
+		copyV := make(map[string]interface{}, len(v))
+		for kk, vv := range v {
+			copyV[kk] = vv
+		}
+		snapshot[k] = copyV
+	}
+	return snapshot
+}
+
 var (
 	filters     = make(map[string]bool)
 	filtersLock sync.RWMutex
-	eventChan   = make(chan Event, 1000)
+	eventChan   = make(chan Event, DefaultEventChanSize)
+	appConfig   *Config
 )
 
 func main() {
-	// Initialize ZMQ
-	pub := zmq4.NewPub(context.Background())
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}
+	log.Logger = zerolog.New(consoleWriter).With().Timestamp().Caller().Logger()
+
+	appConfig = loadConfig()
+
+	filtersLock.Lock()
+	for _, path := range appConfig.FilterPaths {
+		filters[strings.ToLower(path)] = true
+	}
+	filtersLock.Unlock()
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	pub := zmq4.NewPub(ctx)
 	defer pub.Close()
 
-	err := pub.Listen(ZMQ_ENDPOINT)
+	err := pub.Listen(appConfig.ZMQEndpoint)
 	if err != nil {
-		log.Fatalf("could not listen on ZMQ: %v", err)
+		log.Fatal().Err(err).Str("endpoint", appConfig.ZMQEndpoint).Msg("failed to listen on ZMQ")
 	}
-	fmt.Printf("Backend started. Publishing to %s\n", ZMQ_ENDPOINT)
+	log.Info().Str("endpoint", appConfig.ZMQEndpoint).Msg("backend started")
 
-	// Start batcher
-	go batcher(pub)
+	var wg sync.WaitGroup
 
-	// Monitor keys
-	go monitorKey(registry.CURRENT_USER, "HKEY_CURRENT_USER")
-	go monitorKey(registry.LOCAL_MACHINE, "HKEY_LOCAL_MACHINE\\SOFTWARE")
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		batcher(ctx, pub)
+	}()
 
-	// Keep alive
-	select {}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		monitorKey(ctx, registry.CURRENT_USER, "HKEY_CURRENT_USER")
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		monitorKey(ctx, registry.LOCAL_MACHINE, "HKEY_LOCAL_MACHINE\\SOFTWARE")
+	}()
+
+	<-ctx.Done()
+	log.Info().Msg("shutdown signal received, stopping monitors...")
+
+	wg.Wait()
+	log.Info().Msg("backend stopped cleanly")
 }
 
-func monitorKey(root registry.Key, rootName string) {
-	// We use a simplified approach here due to RegNotifyChangeKeyValue limitations.
-	// In a real high-performance scenario, we'd use ETW or a driver.
-	// With RegNotifyChangeKeyValue, we know SOMETHING changed, then we scan.
-	
+func monitorKey(ctx context.Context, root registry.Key, rootName string) {
 	hEvent, err := windows.CreateEvent(nil, 0, 0, nil)
 	if err != nil {
-		log.Printf("Error creating event: %v", err)
+		log.Error().Err(err).Str("root", rootName).Msg("failed to create event")
 		return
 	}
 	defer windows.CloseHandle(hEvent)
 
-	// Initial snapshot
-	cache := make(map[string]map[string]interface{})
-	snapshot(root, rootName, cache)
+	cache := NewRegistryCache()
+	scanIntoCache(root, rootName, cache, 0)
+	log.Info().Str("root", rootName).Msg("initial snapshot complete")
 
 	for {
-		err := windows.RegNotifyChangeKeyValue(windows.Handle(root), true, 
-			windows.REG_NOTIFY_CHANGE_NAME|windows.REG_NOTIFY_CHANGE_ATTRIBUTES|
-			windows.REG_NOTIFY_CHANGE_LAST_SET|windows.REG_NOTIFY_CHANGE_SECURITY, 
-			hEvent, true)
-		
+		select {
+		case <-ctx.Done():
+			log.Debug().Str("root", rootName).Msg("monitor stopping")
+			return
+		default:
+		}
+
+		err := windows.RegNotifyChangeKeyValue(
+			windows.Handle(root),
+			true,
+			windows.REG_NOTIFY_CHANGE_NAME|
+				windows.REG_NOTIFY_CHANGE_ATTRIBUTES|
+				windows.REG_NOTIFY_CHANGE_LAST_SET|
+				windows.REG_NOTIFY_CHANGE_SECURITY,
+			hEvent,
+			true,
+		)
 		if err != nil {
-			log.Printf("Error setting up notification for %s: %v", rootName, err)
+			log.Error().Err(err).Str("root", rootName).Msg("failed to setup notification")
 			return
 		}
 
-		// Wait for change
-		event, err := windows.WaitForSingleObject(hEvent, windows.INFINITE)
+		event, err := windows.WaitForSingleObject(hEvent, DefaultWaitTimeoutMS)
 		if err != nil {
-			log.Printf("Error waiting for event: %v", err)
+			log.Warn().Err(err).Str("root", rootName).Msg("wait error")
 			continue
 		}
 
 		if event == windows.WAIT_OBJECT_0 {
-			// Change detected! Scan and compare.
-			// To avoid huge performance hits, we only scan the keys that we previously knew.
-			// Note: This is a simplified implementation. A full recursive scan on every change
-			// would be too slow for 500+ changes/sec.
 			compareAndRefresh(root, rootName, cache)
 		}
 	}
 }
 
-func snapshot(root registry.Key, rootName string, cache map[string]map[string]interface{}) {
-	// Recursive snapshot (limited to avoid infinite loops or massive memory usage)
-	// For this demo/task, we'll scan some levels deep.
-	scan(root, rootName, cache, 0)
-}
-
-func scan(key registry.Key, path string, cache map[string]map[string]interface{}, depth int) {
-	if depth > 5 { // Limit depth for performance
+func scanIntoCache(key registry.Key, path string, cache *RegistryCache, depth int) {
+	if depth > appConfig.MaxScanDepth {
 		return
 	}
 
@@ -123,7 +270,7 @@ func scan(key registry.Key, path string, cache map[string]map[string]interface{}
 		if err != nil {
 			continue
 		}
-		
+
 		var val interface{}
 		switch valType {
 		case registry.DWORD:
@@ -140,7 +287,7 @@ func scan(key registry.Key, path string, cache map[string]map[string]interface{}
 		}
 		values[name] = val
 	}
-	cache[path] = values
+	cache.Set(path, values)
 
 	subkeys, _ := key.ReadSubKeyNames(-1)
 	for _, sub := range subkeys {
@@ -148,23 +295,22 @@ func scan(key registry.Key, path string, cache map[string]map[string]interface{}
 		if err != nil {
 			continue
 		}
-		scan(subKey, path+"\\"+sub, cache, depth+1)
+		scanIntoCache(subKey, path+"\\"+sub, cache, depth+1)
 		subKey.Close()
 	}
 }
 
-func compareAndRefresh(root registry.Key, rootName string, cache map[string]map[string]interface{}) {
-	// In a real app, we'd be more selective. Here we just re-scan.
-	newCache := make(map[string]map[string]interface{})
-	scan(root, rootName, newCache, 0)
+func compareAndRefresh(root registry.Key, rootName string, cache *RegistryCache) {
+	newCache := NewRegistryCache()
+	scanIntoCache(root, rootName, newCache, 0)
 
 	now := time.Now().Format(time.RFC3339Nano)
+	oldSnapshot := cache.Snapshot()
+	newSnapshot := newCache.Snapshot()
 
-	// Find new/modified
-	for path, values := range newCache {
-		oldValues, exists := cache[path]
+	for path, values := range newSnapshot {
+		oldValues, exists := oldSnapshot[path]
 		if !exists {
-			// New Key - report all its values as NEW
 			for name, val := range values {
 				report(Event{
 					Timestamp:  now,
@@ -203,11 +349,9 @@ func compareAndRefresh(root registry.Key, rootName string, cache map[string]map[
 		}
 	}
 
-	// Find deleted
-	for path, oldValues := range cache {
-		newValues, exists := newCache[path]
+	for path, oldValues := range oldSnapshot {
+		newValues, exists := newSnapshot[path]
 		if !exists {
-			// Deleted Key - report all its values as DELETED
 			for name, val := range oldValues {
 				report(Event{
 					Timestamp:  now,
@@ -235,13 +379,7 @@ func compareAndRefresh(root registry.Key, rootName string, cache map[string]map[
 		}
 	}
 
-	// Update cache
-	for k := range cache {
-		delete(cache, k)
-	}
-	for k, v := range newCache {
-		cache[k] = v
-	}
+	cache.ReplaceAll(newSnapshot)
 }
 
 func inferType(val interface{}) string {
@@ -258,26 +396,39 @@ func inferType(val interface{}) string {
 }
 
 func report(e Event) {
-	// Check filters
 	filtersLock.RLock()
-	if filters[e.KeyPath] {
-		filtersLock.RUnlock()
-		return
+	keyLower := strings.ToLower(e.KeyPath)
+	for filterPath := range filters {
+		if keyLower == filterPath || strings.HasPrefix(keyLower, filterPath+"\\") {
+			filtersLock.RUnlock()
+			return
+		}
 	}
 	filtersLock.RUnlock()
 
-	eventChan <- e
+	select {
+	case eventChan <- e:
+	default:
+		log.Warn().Str("path", e.KeyPath).Msg("event channel full, dropping event")
+	}
 }
 
-func batcher(pub zmq4.Socket) {
+func batcher(ctx context.Context, pub zmq4.Socket) {
 	var currentBatch []Event
-	ticker := time.NewTicker(BATCH_INTERVAL)
+	ticker := time.NewTicker(time.Duration(appConfig.BatchIntervalMS) * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
+		case <-ctx.Done():
+			if len(currentBatch) > 0 {
+				sendBatch(pub, currentBatch)
+			}
+			log.Debug().Msg("batcher stopped")
+			return
 		case e := <-eventChan:
 			currentBatch = append(currentBatch, e)
-			if len(currentBatch) >= BATCH_SIZE {
+			if len(currentBatch) >= appConfig.BatchSize {
 				sendBatch(pub, currentBatch)
 				currentBatch = nil
 			}
@@ -294,10 +445,12 @@ func sendBatch(pub zmq4.Socket, events []Event) {
 	b := Batch{Events: events}
 	data, err := json.Marshal(b)
 	if err != nil {
+		log.Error().Err(err).Msg("failed to marshal batch")
 		return
 	}
-	err = pub.Send(zmq4.NewMsg(data))
-	if err != nil {
-		log.Printf("Error sending batch: %v", err)
+	if err := pub.Send(zmq4.NewMsg(data)); err != nil {
+		log.Error().Err(err).Int("events", len(events)).Msg("failed to send batch")
+	} else {
+		log.Debug().Int("events", len(events)).Msg("batch sent")
 	}
 }
