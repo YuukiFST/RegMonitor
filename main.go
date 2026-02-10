@@ -26,6 +26,11 @@ const (
 	DefaultWaitTimeoutMS = 500
 	DefaultMaxEvents     = 5000
 	ConfigFilePath       = "config.json"
+
+	ChangeTypeNew      = "NEW"
+	ChangeTypeModified = "MODIFIED"
+	ChangeTypeDeleted  = "DELETED"
+	UnsupportedValue   = "[Binary/Other]"
 )
 
 type Config struct {
@@ -33,7 +38,7 @@ type Config struct {
 	BatchIntervalMS int      `json:"batch_interval_ms"`
 	BatchSize       int      `json:"batch_size"`
 	MaxScanDepth    int      `json:"max_scan_depth"`
-	FilterPaths     []string `json:"filtros_paths"`
+	FilterPaths     []string `json:"excluded_paths"`
 }
 
 func loadConfig() *Config {
@@ -283,7 +288,7 @@ func scanIntoCache(key registry.Key, path string, cache *RegistryCache, depth in
 			v, _, _ := key.GetStringValue(name)
 			val = v
 		default:
-			val = "[Binary/Other]"
+			val = UnsupportedValue
 		}
 		values[name] = val
 	}
@@ -314,7 +319,7 @@ func compareAndRefresh(root registry.Key, rootName string, cache *RegistryCache)
 			for name, val := range values {
 				report(Event{
 					Timestamp:  now,
-					ChangeType: "NEW",
+					ChangeType: ChangeTypeNew,
 					KeyPath:    path,
 					ValueName:  name,
 					DataType:   inferType(val),
@@ -329,7 +334,7 @@ func compareAndRefresh(root registry.Key, rootName string, cache *RegistryCache)
 			if !valExists {
 				report(Event{
 					Timestamp:  now,
-					ChangeType: "NEW",
+					ChangeType: ChangeTypeNew,
 					KeyPath:    path,
 					ValueName:  name,
 					DataType:   inferType(val),
@@ -338,7 +343,7 @@ func compareAndRefresh(root registry.Key, rootName string, cache *RegistryCache)
 			} else if oldVal != val {
 				report(Event{
 					Timestamp:  now,
-					ChangeType: "MODIFIED",
+					ChangeType: ChangeTypeModified,
 					KeyPath:    path,
 					ValueName:  name,
 					DataType:   inferType(val),
@@ -355,7 +360,7 @@ func compareAndRefresh(root registry.Key, rootName string, cache *RegistryCache)
 			for name, val := range oldValues {
 				report(Event{
 					Timestamp:  now,
-					ChangeType: "DELETED",
+					ChangeType: ChangeTypeDeleted,
 					KeyPath:    path,
 					ValueName:  name,
 					DataType:   inferType(val),
@@ -369,7 +374,7 @@ func compareAndRefresh(root registry.Key, rootName string, cache *RegistryCache)
 			if _, valExists := newValues[name]; !valExists {
 				report(Event{
 					Timestamp:  now,
-					ChangeType: "DELETED",
+					ChangeType: ChangeTypeDeleted,
 					KeyPath:    path,
 					ValueName:  name,
 					DataType:   inferType(oldVal),
