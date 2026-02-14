@@ -22,14 +22,17 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# Go
+# Rust
+backend/target/
+**/*.rs.bk
+
+# Build Artifacts
 main.exe
 main
 *.test
 *.out
-
-# PyInstaller
 *.spec
+remove_comments.py
 
 # VS Code
 .vscode/
@@ -37,3 +40,7 @@ main
 # Project specific
 *.log
 *.tmp
+config.json
+
+# Agent
+.agent/

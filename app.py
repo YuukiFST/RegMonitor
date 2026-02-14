@@ -6,6 +6,7 @@ import os
 import logging
 import subprocess
 import ctypes
+import encodings.utf_16_le
 from typing import Optional, Any
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -27,7 +28,7 @@ ZMQ_ENDPOINT = "tcp://127.0.0.1:5555"
 CONFIG_FILE = "config.json"
 AUTOCOMPLETE_DEBOUNCE_MS = 300
 AUTOCOMPLETE_MAX_SUGGESTIONS = 5
-MAX_EVENTS = 5000
+MAX_EVENTS = 10000
 BACKEND_EXE = "main.exe"
 DEFAULT_OPACITY = 0.9
 MIN_OPACITY = 0.1
@@ -60,6 +61,36 @@ DWMWA_USE_IMMERSIVE_DARK_MODE_NEW = 20
 DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
 DWMWA_CAPTION_COLOR = 35
 DWMWA_TEXT_COLOR = 36
+
+
+def apply_dark_mode(hwnd: int) -> None:
+    """Apply Windows DWM dark mode attributes to a window handle."""
+    try:
+        dark_value = ctypes.c_int(1)
+        result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_NEW,
+            ctypes.byref(dark_value), ctypes.sizeof(dark_value)
+        )
+        if result != 0:
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
+                ctypes.byref(dark_value), ctypes.sizeof(dark_value)
+            )
+        
+        black_color = ctypes.c_uint(0x00000000)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_CAPTION_COLOR,
+            ctypes.byref(black_color), ctypes.sizeof(black_color)
+        )
+        
+        text_color = ctypes.c_uint(0x00E0E0E0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            hwnd, DWMWA_TEXT_COLOR,
+            ctypes.byref(text_color), ctypes.sizeof(text_color)
+        )
+    except Exception as e:
+        logger.warning(f"Could not apply dark title bar: {e}")
+
 
 
 CHANGE_TYPE_NEW = "NEW"
@@ -556,19 +587,21 @@ class RegistryTableModel(QAbstractTableModel):
         return None
 
     def add_events(self, new_events: list[dict[str, Any]]) -> None:
-        total_after = len(self.events) + len(new_events)
-        if total_after > MAX_EVENTS:
-            
-            self.beginResetModel()
-            self.events.extend(new_events)
-            overflow = len(self.events) - MAX_EVENTS
-            if overflow > 0:
-                self.events = self.events[overflow:]
-            self.endResetModel()
-        else:
-            self.beginInsertRows(QModelIndex(), len(self.events), len(self.events) + len(new_events) - 1)
-            self.events.extend(new_events)
-            self.endInsertRows()
+        if not new_events:
+            return
+
+        overflow = len(self.events) + len(new_events) - MAX_EVENTS
+        if overflow > 0:
+            remove_count = min(overflow, len(self.events))
+            if remove_count > 0:
+                self.beginRemoveRows(QModelIndex(), 0, remove_count - 1)
+                del self.events[:remove_count]
+                self.endRemoveRows()
+
+        start = len(self.events)
+        self.beginInsertRows(QModelIndex(), start, start + len(new_events) - 1)
+        self.events.extend(new_events)
+        self.endInsertRows()
 
     def clear(self) -> None:
         self.beginResetModel()
@@ -685,6 +718,18 @@ class BackendProcessManager:
             return False
         return self.process.poll() is None
 
+class ModernMessageBox(QMessageBox):
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.setWindowOpacity(DEFAULT_OPACITY)
+        self.setStyleSheet(DARK_STYLESHEET)
+        
+    def showEvent(self, event: QEvent) -> None:
+        super().showEvent(event)
+        # Apply dark mode to title bar
+        apply_dark_mode(int(self.winId()))
+
+
 class MainWindow(QMainWindow):
     UNDO_STACK_MAX_SIZE = 20
 
@@ -720,33 +765,7 @@ class MainWindow(QMainWindow):
 
     def _apply_dark_title_bar(self) -> None:
         """Use DWM API to set a black title bar matching the window background."""
-        try:
-            hwnd = int(self.winId())
-            
-            dark_value = ctypes.c_int(1)
-            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_NEW,
-                ctypes.byref(dark_value), ctypes.sizeof(dark_value)
-            )
-            if result != 0:
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                    hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD,
-                    ctypes.byref(dark_value), ctypes.sizeof(dark_value)
-                )
-            
-            black_color = ctypes.c_uint(0x00000000)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_CAPTION_COLOR,
-                ctypes.byref(black_color), ctypes.sizeof(black_color)
-            )
-            
-            text_color = ctypes.c_uint(0x00E0E0E0)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(
-                hwnd, DWMWA_TEXT_COLOR,
-                ctypes.byref(text_color), ctypes.sizeof(text_color)
-            )
-        except Exception as e:
-            logger.warning(f"Could not apply dark title bar: {e}")
+        apply_dark_mode(int(self.winId()))
 
     def start_backend(self) -> None:
         if not self.backend_manager.start():
@@ -899,6 +918,8 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(22)
+        self.table.setWordWrap(False)
         
         layout.addWidget(self.table)
 
@@ -1176,106 +1197,64 @@ class MainWindow(QMainWindow):
 
     def export_reg(self) -> None:
         if not self.model.events:
-            QMessageBox.warning(self, "Export", "No events to export.")
+            msg = ModernMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Export")
+            msg.setText("No events to export.")
+            msg.exec()
             return
-        
+
         path, _ = QFileDialog.getSaveFileName(self, "Save .REG", f"registry_changes_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.reg", "Registry Files (*.reg)")
         if not path:
             return
 
-        sections = {CHANGE_TYPE_NEW: {}, CHANGE_TYPE_MODIFIED: {}, CHANGE_TYPE_DELETED: {}}
-        counts = {CHANGE_TYPE_NEW: 0, CHANGE_TYPE_MODIFIED: 0, CHANGE_TYPE_DELETED: 0}
+        merged: dict[str, dict[str, tuple[str, Any]]] = {}
 
         for e in self.model.events:
             ctype = e.get("change_type")
-            key_path = e.get("key_path")
-            val_name = e.get("value_name")
-            dtype = e.get("data_type")
-            new_val = e.get("new_value")
-            old_val = e.get("old_value")
+            if ctype not in (CHANGE_TYPE_NEW, CHANGE_TYPE_MODIFIED):
+                continue
 
-            if ctype not in sections: continue
-            
-            if key_path not in sections[ctype]:
-                sections[ctype][key_path] = []
-            
-            sections[ctype][key_path].append({
-                "name": val_name,
-                "dtype": dtype,
-                "value": new_val if ctype != CHANGE_TYPE_DELETED else old_val,
-                "old_value": old_val
-            })
-            counts[ctype] += 1
+            key_path = e.get("key_path", "")
+            val_name = e.get("value_name", "")
+            dtype = e.get("data_type", "")
+            new_val = e.get("new_value")
+
+            if key_path not in merged:
+                merged[key_path] = {}
+            merged[key_path][val_name] = (dtype, new_val)
+
+        if not merged:
+            msg = ModernMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Export")
+            msg.setText("No NEW or MODIFIED values to export.")
+            msg.exec()
+            return
 
         try:
             with open(path, 'w', encoding='utf-16-le') as f:
                 f.write('\ufeff')
                 f.write("Windows Registry Editor Version 5.00\n\n")
-                f.write(";==================================================\n")
-                f.write("; WINDOWS REGISTRY MONITOR - EXPORT REPORT\n")
-                f.write(";==================================================\n")
-                f.write(f"; Export Date: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                if self.start_time:
-                    f.write(f"; Monitoring Period: {self.start_time.strftime('%Y-%m-%d %H:%M:%S')} → {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(";\n")
-                f.write("; Summary:\n")
-                f.write(f";   NEW values: {counts[CHANGE_TYPE_NEW]}\n")
-                f.write(f";   MODIFIED values: {counts[CHANGE_TYPE_MODIFIED]}\n")
-                f.write(f";   DELETED values: {counts[CHANGE_TYPE_DELETED]}\n")
-                f.write(f";   TOTAL changes: {sum(counts.values())}\n")
-                
-                filter_paths = self._get_filter_paths()
-                if filter_paths:
-                    f.write("; Filters Applied:\n")
-                    for filter_path in filter_paths:
-                        f.write(f";   - {filter_path}\n")
-                f.write(";==================================================\n\n")
 
-
-                
-                f.write(";==================================================\n")
-                f.write(f"; SECTION 1: NEW VALUES ADDED (Total: {counts[CHANGE_TYPE_NEW]})\n")
-                f.write(";==================================================\n\n")
-                for key, vals in sorted(sections[CHANGE_TYPE_NEW].items()):
+                for key in sorted(merged.keys()):
                     f.write(f"[{key}]\n")
-                    for v in vals:
-                        reg_val = self.format_reg_value(v["dtype"], v["value"])
-                        f.write(f'"{v["name"]}"={reg_val}\n')
+                    for val_name, (dtype, value) in sorted(merged[key].items()):
+                        reg_val = self.format_reg_value(dtype, value)
+                        f.write(f'"{val_name}"={reg_val}\n')
                     f.write("\n")
 
-                
-                f.write(";==================================================\n")
-                f.write(f"; SECTION 2: MODIFIED VALUES (Total: {counts[CHANGE_TYPE_MODIFIED]})\n")
-                f.write(";==================================================\n\n")
-                for key, vals in sorted(sections[CHANGE_TYPE_MODIFIED].items()):
-                    f.write(f"[{key}]\n")
-                    for v in vals:
-                        f.write(f'; Old value: {v["old_value"]}\n')
-                        reg_val = self.format_reg_value(v["dtype"], v["value"])
-                        f.write(f'"{v["name"]}"={reg_val}\n')
-                    f.write("\n")
-
-                
-                f.write(";==================================================\n")
-                f.write(f"; SECTION 3: DELETED VALUES (Total: {counts[CHANGE_TYPE_DELETED]})\n")
-                f.write(";==================================================\n\n")
-                for key, vals in sorted(sections[CHANGE_TYPE_DELETED].items()):
-                    f.write(f"[{key}]\n")
-                    for v in vals:
-                        f.write(f'; Original value was: {v["value"]}\n')
-                        f.write(f'"{v["name"]}"=-\n')
-                    f.write("\n")
-
-            QMessageBox.information(self, "Export Complete!", 
-                f"File: {path}\n\n"
-                f"NEW values: {counts[CHANGE_TYPE_NEW]}\n"
-                f"MODIFIED values: {counts[CHANGE_TYPE_MODIFIED]}\n"
-                f"DELETED values: {counts[CHANGE_TYPE_DELETED]}\n\n"
-                "Important:\n"
-                "- Review the file before applying\n"
-                "- Deleted values are marked with (-) and need manual restoration")
+            msg = ModernMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Export Complete")
+            msg.setText(f"Saved to:\n{path}")
+            msg.exec()
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Failed to export .reg file: {e}")
+            msg = ModernMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Export Error")
+            msg.setText(f"Failed to export .reg file: {e}")
+            msg.exec()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
