@@ -2,6 +2,8 @@
 
 A lightweight, real-time Windows Registry monitoring tool.
 
+> **Note:** This tool was created via **"vibe coding"** for learning purposes, specifically to test if an LLM could perfectly execute the user's requests.
+
 ## Usage
 
 1. Run `RegMonitor.exe` (as Administrator).
