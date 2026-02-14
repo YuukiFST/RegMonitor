@@ -2,7 +2,7 @@
 
 A lightweight, real-time Windows Registry monitoring tool.
 
-> **Note:** This tool was created via **"vibe coding"** for learning purposes, specifically to test if an LLM could perfectly execute the user's requests.
+> **Note:** This tool was created via **"vibe coding"** for learning purposes, specifically to test whether an LLM could perfectly execute a user's requests. I also built the same tool myself using Go instead of Rust, but I decided to vibe code the back end in Rust because the performance difference is very noticeable.
 
 ## Usage
 
